@@ -1,0 +1,14 @@
+name: gpt_env
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.12
+  - numpy
+  - transformers
+  - tiktoken
+  - datasets
+  - wandb
+  - tqdm
+  - pyyaml 
