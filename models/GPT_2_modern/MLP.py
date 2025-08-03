@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Dict, Any
 
 import torch
 import torch.nn as nn
@@ -9,16 +9,16 @@ class MLP(nn.Module):
     """
     A SwiGLU-based MLP module, following modern LLM architecture practices.
     """
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__()
         
         # Llama-style hidden dimension calculation for SwiGLU
-        hidden_dim = int(2/3 * (4 * config.n_embd))
-        
-        self.w1 = nn.Linear(config.n_embd, hidden_dim, bias=False)
-        self.w3 = nn.Linear(config.n_embd, hidden_dim, bias=False)
-        self.w2 = nn.Linear(hidden_dim, config.n_embd, bias=False)
-        
+        hidden_dim = int(2/3 * (4 * config['n_embd']))
+
+        self.w1 = nn.Linear(config['n_embd'], hidden_dim, bias=config['bias'])
+        self.w3 = nn.Linear(config['n_embd'], hidden_dim, bias=config['bias'])
+        self.w2 = nn.Linear(hidden_dim, config['n_embd'], bias=config['bias'])
+
         # Retain custom initialization scheme for the projection layer
         self.w2.NANO_SCALE_INIT = 1
 

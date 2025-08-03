@@ -52,8 +52,6 @@ else:
     encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
     decode = lambda l: enc.decode(l)
 
-# ==============================================================================
-
 
 print("\n--- Start Chatting (press Enter on an empty line to exit) ---")
 while True:
@@ -71,7 +69,6 @@ while True:
         top_k=top_k
     )
 
-    # Декодируем и печатаем результат
     generated_tokens = generated_tokens_tensor[0].tolist()
     completion = decode(generated_tokens)
     

@@ -1,5 +1,5 @@
 import inspect
-from typing import Optional, Tuple, Any
+from typing import Dict, Optional, Tuple, Any
 
 import torch
 import torch.nn as nn
@@ -12,23 +12,22 @@ class CausalSelfAttention(nn.Module):
     A multi-head causal self-attention module that integrates Rotary Positional
     Embeddings (RoPE) using the torchtune library implementation.
     """
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__()
-        assert config.n_embd % config.n_head == 0
-        
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=False)
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
-        
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
-        
+        assert config['n_embd'] % config['n_head'] == 0
+
+        self.c_attn = nn.Linear(config['n_embd'], 3 * config['n_embd'], bias=config['bias'])
+        self.c_proj = nn.Linear(config['n_embd'], config['n_embd'], bias=config['bias'])
+        self.n_head = config['n_head']
+        self.n_embd = config['n_embd']
+
         self.c_proj.NANOGPT_SCALE_INIT = 1
 
         # Instantiate the RoPE module from torchtune
         self.head_size = self.n_embd // self.n_head
         self.rope = RotaryPositionalEmbeddings(
             dim=self.head_size,
-            max_seq_len=config.block_size,
+            max_seq_len=config['block_size'],
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

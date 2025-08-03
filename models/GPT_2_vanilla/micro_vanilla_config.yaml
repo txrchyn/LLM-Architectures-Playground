@@ -1,0 +1,31 @@
+# --- Wandb Config ---
+wandb_log: true
+wandb_run_name: 'vanilla-gpt-124M'
+
+# --- Model Config ---
+model_name: 'vanilla' 
+n_layer: 12
+n_head: 12
+n_embd: 768
+block_size: 1024
+vocab_size: 50304 
+bias: true
+
+# --- Training Config ---
+batch_size: 8
+sequence_length: 1024
+total_batch_size: 65536
+max_steps: 19073
+max_lr: 6e-4
+weight_decay: 0.1
+warmup_steps_percentage: 0.07  # 7% of total steps
+beta1: 0.9
+beta2: 0.95
+
+# --- I/O Config ---
+dataset_name: 'fineweb' # 'shakespeare', 'tinystories', 'fineweb'
+out_dir: 'checkpoints'
+save_checkpoint_step: false
+every_n_steps_save: 1000
+eval_interval: 100
+eval_iters: 20

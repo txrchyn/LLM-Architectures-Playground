@@ -1,17 +1,28 @@
 import os
 import time
 import math
+import yaml 
+from dotenv import load_dotenv
+from argparse import ArgumentParser
 
 import wandb
 import torch
-from dataclasses import asdict
+import torch._dynamo
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
-from ..models.GPT_2_modern import GPT, MicroGPTConfig, GPTConfig
-from ..utils import DataLoaderLite
+from utils import DataLoaderLite
+from models.GPT_2_modern.ModernGPT import ModernGPT
+from models.GPT_2_vanilla.VanillaGPT import VanillaGPT
 
+load_dotenv()
+
+parser = ArgumentParser(description='Train a GPT model.')
+parser.add_argument('--config', type=str, required=True, help='Path to the YAML config file.')
+args = parser.parse_args()
+with open(args.config, 'r') as f:
+    config = yaml.safe_load(f)
 
 torch.set_float32_matmul_precision('high')
 # torchrun command sets the env variables RANK = Unique rank of the process across all nodes
@@ -33,7 +44,7 @@ if ddp:
     torch.cuda.set_device(device)
     master_process = ddp_rank == 0
 else:
-    # vanilla, non-DDP run
+    # non-DDP run
     ddp_rank = 0
     ddp_local_rank = 0
     ddp_world_size = 1
@@ -42,57 +53,64 @@ else:
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Device: {device}")
 
-# The dataset used here is a FineWeb_Edu 10B tokens
-B = 24
-T = 1024 # 1024ё
-total_batch_size = B * T # 524288 = 2^19, ~0.5M, in number of tokens
-max_lr = 6e-4
-min_lr = max_lr * 0.1
-max_steps = 20000 # 19073 steps is ~1 epoch, ~10B tokens of FineWeb_Edu dataset
-warmup_steps = max_steps * 0.07 # in gpt3 paper was used the same proportion = 715/19073
+B = config["batch_size"]  
+T = config["sequence_length"] 
+total_batch_size = config["total_batch_size"]
+max_lr = float(config["max_lr"])  
+min_lr = max_lr * config['weight_decay']
+max_steps = config["max_steps"]
+warmup_steps = max_steps * config['warmup_steps_percentage']
 
+effective_batch_size = B * T * ddp_world_size
+is_divisible = (total_batch_size % effective_batch_size == 0)
+error_msg = f"Total batch size {total_batch_size} must be divisible by B*T*world_size {effective_batch_size}"
 
-assert total_batch_size % (B * T * ddp_world_size) == 0
-grad_accum_steps = int(total_batch_size // (B * T * ddp_world_size))
+assert is_divisible, error_msg
+
+grad_accum_steps = total_batch_size // effective_batch_size
 
 
 if master_process:
     print(f"Total desired batch size: {total_batch_size}")
-    print(f"Calculatted gradient accumulation steps: {grad_accum_steps}")
+    print(f"Calculated gradient accumulation steps: {grad_accum_steps}")
 
-if master_process:
+if config['wandb_log']:
     wandb.init(                                            
-        project="nanogpt2", 
-        entity="kyrylo-turchyn-",
-        name=f"+ RMSNormm",
+        project=os.environ.get("wandb_project_name"),
+        entity=os.environ.get("entity"),
+        name=config["wandb_run_name"],
         config={
-            "model": asdict(MicroGPTConfig()),
-            "total_batch_size": total_batch_size,
-            "batch_size_per_gpu": B,
-            "sequ e_length": T,
-            "max_lr": max_lr,
-            "min_lr": min_lr,
-            "warmup_steps": warmup_steps,
-            "max_steps": max_steps,
-            "grad_accum_steps": grad_accum_steps,
-            "world_size": ddp_world_size,
+            "model": config,
         }
     )
 
-train_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split='train', dataset_name='tinystories')
-val_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split='val', dataset_name='tinystories')
+train_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, 
+                              num_processes=ddp_world_size, split='train', 
+                              dataset_name=config['dataset_name'])
+val_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, 
+                              num_processes=ddp_world_size, split='val', 
+                              dataset_name=config['dataset_name'])
 
-model = GPT(MicroGPTConfig())
+model = None
+model_name = config['model_name']
+
+if model_name == 'modern':
+    print("Initializing a Modern GPT model")
+    model = ModernGPT(config)
+elif model_name == 'vanilla':
+    print("Initializing a Vanilla GPT model")
+    model = VanillaGPT(config)
+else:
+    raise ValueError(f"Unknown model_name '{model_name}' in config file.")
+
 model.to(device)
-model = torch.compile(model)
-
-if master_process:
-    wandb.watch(model, log="all", log_freq=100)
 
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 
+model = torch.compile(model)
 raw_model = model.module if ddp else model
+
 # ---- CHECKPOINT LOADING ----
 start_step = 0
 latest_checkpoint_path = None
@@ -105,22 +123,15 @@ if os.path.exists(CHECKPOINT_DIR) and len(os.listdir(CHECKPOINT_DIR)) > 0:
 if latest_checkpoint_path:
     print(f"Resuming from checkpoint: {latest_checkpoint_path}")
     checkpoint = torch.load(latest_checkpoint_path, map_location=device, weights_only=False)
-    # When loading a DDP model checkpoint onto a non-DDP model (or vice-versa)
-    # the keys in state_dict might not match. We need to adjust them.
     state_dict = checkpoint['model']
     unwrapped_model = model.module if ddp else model
-    # Fix for DDP model saved without DDP
     if ddp and not any(k.startswith('module.') for k in state_dict.keys()):
         state_dict = {'module.' + k: v for k, v in state_dict.items()}
-    # Fix for non-DDP model saved with DDP
     elif not ddp and any(k.startswith('module.') for k in state_dict.keys()):
         state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
     unwrapped_model.load_state_dict(state_dict)
     if 'optimizer' in checkpoint:
         optimizer_state_dict = checkpoint['optimizer']
-        # Ensure the optimizer is created before loading its state
-        # We'll create the optimizer a bit later in the code, so we'll load its state then.
-        # For now, we'll store it.
         loaded_optimizer_state_dict = optimizer_state_dict
     else:
         loaded_optimizer_state_dict = None
@@ -136,14 +147,12 @@ def get_lr(it):
         return max_lr * (it + 1) / warmup_steps
     if it > max_steps:
         return min_lr
-
     decay_ratio = (it - warmup_steps) / (max_steps - warmup_steps)
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return min_lr + coeff * (max_lr - min_lr)
 
-# logits, loss = model(x, y)
-optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=max_lr, betas=(0.9, 0.95), device=device)
+optimizer = raw_model.configure_optimizers(weight_decay=config["weight_decay"], learning_rate=max_lr, betas=(config['beta1'], config['beta2']), device=device)
 
 # ---- LOAD OPTIMIZER STATE ----
 if loaded_optimizer_state_dict:
@@ -178,12 +187,12 @@ def save_checkpoint(step, model_to_save, opt, current_loss):
 for step in range(start_step, max_steps):
     t0 = time.time()
     # once in a while evaluate our validation loss
-    if step % 100 == 0:
+    if step % config['eval_interval'] == 0:
         model.eval()
         val_loader.reset()
         with torch.no_grad():
             val_loss_accum = 0.0
-            val_loss_steps = 20
+            val_loss_steps = config['eval_iters']
             for _ in range(val_loss_steps):
                 x, y = val_loader.next_batch()
                 x, y = x.to(device), y.to(device)
@@ -195,8 +204,7 @@ for step in range(start_step, max_steps):
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
         if master_process:
             print(f"validation loss: {val_loss_accum.item():.4f}")
-            wandb.log({"train/val_loss": val_loss_accum.item()}, step=step)
-
+            wandb.log({"val_loss": val_loss_accum.item()}, step=step)
 
     model.train()
     optimizer.zero_grad()
@@ -229,16 +237,16 @@ for step in range(start_step, max_steps):
     ppl  = torch.exp(loss)
 
     # once in a while save checkpoint
-    if step > 0 and step % 1000 == 0: # Save every 1000 steps
+    if config['save_checkpoint_step'] and step > 0 and step % config['every_n_steps_save'] == 0: # Save every 1000 steps
          save_checkpoint(step, raw_model, optimizer, loss_accum.item() if master_process else None)
 
     print(f"iter: {step+1:4d}  |  loss: {loss_accum.item():.6f}  |  ppl: {ppl:.6f}  |  lr {lr:.4e}  |  norm {norm:.4f}  |  time: {dt:.2f}ms  |  tok/sec: {tokens_per_sec:.2f}")
     wandb.log({
-            "train/loss": loss_accum.item(),
-            "train/perplexity": ppl.item(),
-            "train/grad_norm": norm.item(),
-            "train/tokens_per_sec": tokens_per_sec,
-            "train/time_ms": dt,
+            "loss": loss_accum.item(),
+            "perplexity": ppl.item(),
+            "grad_norm": norm.item(),
+            "tokens_per_sec": tokens_per_sec,
+            "time_ms": dt,
         }, step=step)
 
 # Save final checkpoint
