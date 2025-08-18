@@ -3,6 +3,8 @@ from typing import Dict, Any
 import torch
 import torch.nn as nn
 
+from .gpt_2_modern_config import gpt_2_modern_config
+
 from .CausalSelfAttention import CausalSelfAttention
 from .MLP import MLP
 
@@ -12,11 +14,11 @@ class Block(nn.Module):
     A single Transformer block, which combines a multi-head self-attention layer
     with a feed-forward MLP, using pre-layer normalization, RMSNorm, and residual connections.
     """
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: gpt_2_modern_config) -> None:
         super().__init__()
-        self.ln_1 = nn.RMSNorm(config['n_embd'])
+        self.ln_1 = nn.RMSNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
-        self.ln_2 = nn.RMSNorm(config['n_embd'])
+        self.ln_2 = nn.RMSNorm(config.n_embd)
         self.mlp = MLP(config)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

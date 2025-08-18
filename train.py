@@ -1,256 +1,232 @@
 import os
+import sys
 import time
 import math
-import yaml 
+import importlib.util
 from dotenv import load_dotenv
 from argparse import ArgumentParser
 
 import wandb
 import torch
-import torch._dynamo
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from utils import DataLoaderLite
-from models.GPT_2_modern.ModernGPT import ModernGPT
-from models.GPT_2_vanilla.VanillaGPT import VanillaGPT
+from models import create_model
 
-load_dotenv()
+# -----------------------------------------------------------------------------
+# Helper Functions
+# -----------------------------------------------------------------------------
 
-parser = ArgumentParser(description='Train a GPT model.')
-parser.add_argument('--config', type=str, required=True, help='Path to the YAML config file.')
-args = parser.parse_args()
-with open(args.config, 'r') as f:
-    config = yaml.safe_load(f)
-
-torch.set_float32_matmul_precision('high')
-# torchrun command sets the env variables RANK = Unique rank of the process across all nodes
-#                                         LOCAL_RANK = Unique rank of the process on the current node
-#                                         WORLD_SIZE =  Total number of gpus across all nodes
-ddp = int(os.environ.get('LOCAL_RANK', -1)) != -1
-
-CHECKPOINT_DIR = "checkpoints"
-if not os.path.exists(CHECKPOINT_DIR):
-    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-
-if ddp:
-    assert torch.cuda.is_available(), 'DDP requires CUDA support'
-    init_process_group(backend='nccl')
-    ddp_rank = int(os.environ['RANK'])
-    ddp_local_rank = int(os.environ['LOCAL_RANK'])
-    ddp_world_size = int(os.environ['WORLD_SIZE'])
-    device = f'cuda:{ddp_local_rank}'
-    torch.cuda.set_device(device)
-    master_process = ddp_rank == 0
-else:
-    # non-DDP run
-    ddp_rank = 0
-    ddp_local_rank = 0
-    ddp_world_size = 1
-    master_process = True
-
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"Device: {device}")
-
-B = config["batch_size"]  
-T = config["sequence_length"] 
-total_batch_size = config["total_batch_size"]
-max_lr = float(config["max_lr"])  
-min_lr = max_lr * config['weight_decay']
-max_steps = config["max_steps"]
-warmup_steps = max_steps * config['warmup_steps_percentage']
-
-effective_batch_size = B * T * ddp_world_size
-is_divisible = (total_batch_size % effective_batch_size == 0)
-error_msg = f"Total batch size {total_batch_size} must be divisible by B*T*world_size {effective_batch_size}"
-
-assert is_divisible, error_msg
-
-grad_accum_steps = total_batch_size // effective_batch_size
-
-
-if master_process:
-    print(f"Total desired batch size: {total_batch_size}")
-    print(f"Calculated gradient accumulation steps: {grad_accum_steps}")
-
-if config['wandb_log']:
-    wandb.init(                                            
-        project=os.environ.get("wandb_project_name"),
-        entity=os.environ.get("entity"),
-        name=config["wandb_run_name"],
-        config={
-            "model": config,
-        }
-    )
-
-train_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, 
-                              num_processes=ddp_world_size, split='train', 
-                              dataset_name=config['dataset_name'])
-val_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, 
-                              num_processes=ddp_world_size, split='val', 
-                              dataset_name=config['dataset_name'])
-
-model = None
-model_name = config['model_name']
-
-if model_name == 'modern':
-    print("Initializing a Modern GPT model")
-    model = ModernGPT(config)
-elif model_name == 'vanilla':
-    print("Initializing a Vanilla GPT model")
-    model = VanillaGPT(config)
-else:
-    raise ValueError(f"Unknown model_name '{model_name}' in config file.")
-
-model.to(device)
-
-if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank])
-
-model = torch.compile(model)
-raw_model = model.module if ddp else model
-
-# ---- CHECKPOINT LOADING ----
-start_step = 0
-latest_checkpoint_path = None
-if os.path.exists(CHECKPOINT_DIR) and len(os.listdir(CHECKPOINT_DIR)) > 0:
-    checkpoint_files = [f for f in os.listdir(CHECKPOINT_DIR) if f.startswith("ckpt_step_") and f.endswith(".pth")]
-    if checkpoint_files:
-        checkpoint_files.sort(key=lambda x: int(x.split("_")[2].split(".")[0]))
-        latest_checkpoint_path = os.path.join(CHECKPOINT_DIR, checkpoint_files[-1])
-
-if latest_checkpoint_path:
-    print(f"Resuming from checkpoint: {latest_checkpoint_path}")
-    checkpoint = torch.load(latest_checkpoint_path, map_location=device, weights_only=False)
-    state_dict = checkpoint['model']
-    unwrapped_model = model.module if ddp else model
-    if ddp and not any(k.startswith('module.') for k in state_dict.keys()):
-        state_dict = {'module.' + k: v for k, v in state_dict.items()}
-    elif not ddp and any(k.startswith('module.') for k in state_dict.keys()):
-        state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
-    unwrapped_model.load_state_dict(state_dict)
-    if 'optimizer' in checkpoint:
-        optimizer_state_dict = checkpoint['optimizer']
-        loaded_optimizer_state_dict = optimizer_state_dict
+def setup_ddp():
+    ddp = int(os.environ.get('LOCAL_RANK', -1)) != -1
+    if ddp:
+        assert torch.cuda.is_available(), 'DDP requires CUDA support'
+        init_process_group(backend='nccl')
+        rank = int(os.environ['RANK'])
+        local_rank = int(os.environ['LOCAL_RANK'])
+        world_size = int(os.environ['WORLD_SIZE'])
+        device = f'cuda:{local_rank}'
+        torch.cuda.set_device(device)
+        master_process = (rank == 0)
     else:
-        loaded_optimizer_state_dict = None
-    start_step = checkpoint.get('step', 0) + 1
-    print(f"Loaded model from step {start_step -1}. Resuming training from step {start_step}")
-else:
-    print("No checkpoint found, starting training from scratch.")
-    loaded_optimizer_state_dict = None
+        rank = 0
+        local_rank = 0
+        world_size = 1
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        master_process = True
+        print(f"Device: {device}")
+    return ddp, rank, local_rank, world_size, device, master_process
 
+def load_config_from_py_file(config_path):
+    spec = importlib.util.spec_from_file_location("config_module", config_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load the config file from {config_path}")
+    config_module = importlib.util.module_from_spec(spec)
+    sys.modules["config_module"] = config_module
+    spec.loader.exec_module(config_module)
+    return config_module.config
 
-def get_lr(it):
+def get_lr(it, config):
+    warmup_steps = config.max_steps * config.warmup_steps_percentage
+    min_lr = config.max_lr * config.weight_decay
     if it < warmup_steps:
-        return max_lr * (it + 1) / warmup_steps
-    if it > max_steps:
+        return config.max_lr * (it + 1) / warmup_steps
+    if it > config.max_steps:
         return min_lr
-    decay_ratio = (it - warmup_steps) / (max_steps - warmup_steps)
-    assert 0 <= decay_ratio <= 1
+    decay_ratio = (it - warmup_steps) / (config.max_steps - warmup_steps)
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-    return min_lr + coeff * (max_lr - min_lr)
+    return min_lr + coeff * (config.max_lr - min_lr)
 
-optimizer = raw_model.configure_optimizers(weight_decay=config["weight_decay"], learning_rate=max_lr, betas=(config['beta1'], config['beta2']), device=device)
-
-# ---- LOAD OPTIMIZER STATE ----
-if loaded_optimizer_state_dict:
-    optimizer.load_state_dict(loaded_optimizer_state_dict)
-    print("Loaded optimizer state from checkpoint.")
-
-# ---- SAVE CHECKPOINT FUNCTION ----
-def save_checkpoint(step, model_to_save, opt, current_loss):
-    
-    if master_process:
-        checkpoint_path = os.path.join(CHECKPOINT_DIR, f"ckpt_step_{step}.pth")
-        checkpoint = {
-            'model': model_to_save.state_dict(),
-            'optimizer': opt.state_dict(),
-            'step': step,
-            'loss': current_loss,
-            'config': model_to_save.config if hasattr(model_to_save, 'config') else None,
-        }
-        torch.save(checkpoint, checkpoint_path)
-        print(f"Saved checkpoint to {checkpoint_path} at step {step}")
-
-        # Keep only the last 5 checkpoints
-        all_checkpoints = sorted(
-            [os.path.join(CHECKPOINT_DIR, f) for f in os.listdir(CHECKPOINT_DIR) if f.startswith("ckpt_step_") and f.endswith(".pth")],
-            key=lambda x: int(x.split("_")[2].split(".")[0])
-        )
-        if len(all_checkpoints) > 5:
-            for old_ckpt in all_checkpoints[:-5]:
-                os.remove(old_ckpt)
-                print(f"Removed old checkpoint: {old_ckpt}")
-
-for step in range(start_step, max_steps):
-    t0 = time.time()
-    # once in a while evaluate our validation loss
-    if step % config['eval_interval'] == 0:
-        model.eval()
-        val_loader.reset()
-        with torch.no_grad():
-            val_loss_accum = 0.0
-            val_loss_steps = config['eval_iters']
-            for _ in range(val_loss_steps):
-                x, y = val_loader.next_batch()
-                x, y = x.to(device), y.to(device)
-                with torch.autocast(device_type=device, dtype=torch.bfloat16):
-                    logits, loss = model(x, y)
-                loss = loss / val_loss_steps
-                val_loss_accum += loss.detach()
-        if ddp:
-            dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
-        if master_process:
-            print(f"validation loss: {val_loss_accum.item():.4f}")
-            wandb.log({"val_loss": val_loss_accum.item()}, step=step)
-
-    model.train()
-    optimizer.zero_grad()
-    loss_accum = 0.0
-
-    for micro_step in range(grad_accum_steps):
-        x, y = train_loader.next_batch()
+@torch.no_grad()
+def evaluate_loss(model, loader, device, config):
+    model.eval()
+    loader.reset()
+    autocast_context = torch.autocast(device_type=device, dtype=torch.bfloat16)
+    val_loss_accum = torch.zeros(1, device=device)
+    for _ in range(config.eval_iters):
+        x, y = loader.next_batch()
         x, y = x.to(device), y.to(device)
-        with torch.autocast(device_type=device, dtype=torch.bfloat16):
-            logits, loss = model(x, y)
-        loss = loss / grad_accum_steps
-        loss_accum += loss
-        if ddp:
-            model.require_backward_grad_sync = (micro_step == grad_accum_steps - 1)
-        loss.backward()
+        with autocast_context:
+            _, loss = model(x, y)
+        val_loss_accum += loss / config.eval_iters
+    model.train()
+    return val_loss_accum
+
+def save_checkpoint(step, model, optimizer, loss, config, is_master):
+    if not is_master:
+        return
+    
+    checkpoint_dir = f"checkpoints/{config.model_name}"
+    if not os.path.exists(checkpoint_dir):
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+    path = os.path.join(checkpoint_dir, f"ckpt_step_{step}.pth")
+    checkpoint = {
+        'model': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'step': step,
+        'loss': loss,
+        'config': config,
+    }
+    torch.save(checkpoint, path)
+    print(f"Saved checkpoint to {path} at step {step}")
+
+    # Cleanup old checkpoints
+    all_checkpoints = sorted(
+        [os.path.join(checkpoint_dir, f) for f in os.listdir(checkpoint_dir) if f.endswith(".pth")],
+        key=lambda x: int(x.split("_")[2].split(".")[0])
+    )
+    if len(all_checkpoints) > 5:
+        for old_ckpt in all_checkpoints[:-5]:
+            os.remove(old_ckpt)
+            print(f"Removed old checkpoint: {old_ckpt}")
+
+# -----------------------------------------------------------------------------
+# Main execution block
+# -----------------------------------------------------------------------------
+if __name__ == '__main__':
+    load_dotenv()
+    torch.set_float32_matmul_precision('high')
+
+    parser = ArgumentParser(description='Train a GPT model.')
+    parser.add_argument('--config', type=str, required=True, help='Path to the Python config file.')
+    args = parser.parse_args()
+
+    config = load_config_from_py_file(args.config)
+    ddp, ddp_rank, ddp_local_rank, ddp_world_size, device, master_process = setup_ddp()
+
+    tokens_per_iter = config.batch_size * config.sequence_length * ddp_world_size
+    grad_accum_steps = config.total_batch_size // tokens_per_iter
+    assert config.total_batch_size % tokens_per_iter == 0
+
+    if master_process:
+        print(f"Total desired batch size: {config.total_batch_size}")
+        print(f"Calculated gradient accumulation steps: {grad_accum_steps}")
+
+    if config.wandb_log and master_process:
+        wandb.init(
+            project=os.environ.get("WANDB_PROJECT_NAME"),
+            entity=os.environ.get("WANDB_ENTITY"),
+            name=config.wandb_run_name,
+            config=vars(config)
+        )
+
+    train_loader = DataLoaderLite(B=config.batch_size, T=config.sequence_length, process_rank=ddp_rank,
+                                  num_processes=ddp_world_size, split='train', dataset_name=config.dataset_name)
+    val_loader = DataLoaderLite(B=config.batch_size, T=config.sequence_length, process_rank=ddp_rank,
+                                num_processes=ddp_world_size, split='val', dataset_name=config.dataset_name)
+
+    model = create_model(config.model_name, config)
+    model.to(device)
+    try:
+        model = torch.compile(model)
+    except Exception:
+        pass
 
     if ddp:
-        dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
+        model = DDP(model, device_ids=[ddp_local_rank])
+    raw_model = model.module if ddp else model
 
-    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-    lr = get_lr(step)
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+    optimizer = raw_model.configure_optimizers(
+        weight_decay=config.weight_decay,
+        learning_rate=config.max_lr,
+        betas=(config.beta1, config.beta2),
+        device=device
+     )
 
-    optimizer.step()
-    torch.cuda.synchronize()
-    t1 = time.time()
-    dt = (t1 - t0) * 1000
-    tokens_per_sec = (train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size) / (t1 - t0)
-    ppl  = torch.exp(loss)
+    start_step = 0
+    checkpoint_dir = f"checkpoints/{config.model_name}"
+    if os.path.exists(checkpoint_dir):
+        checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pth")]
+        if checkpoint_files:
+            latest_file = max(checkpoint_files, key=lambda x: int(x.split("_")[2].split(".")[0]))
+            path = os.path.join(checkpoint_dir, latest_file)
+            print(f"Resuming from checkpoint: {path}")
+            checkpoint = torch.load(path, map_location=device, weights_only=False)
+            raw_model.load_state_dict(checkpoint['model'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            start_step = checkpoint.get('step', 0) + 1
 
-    # once in a while save checkpoint
-    if config['save_checkpoint_step'] and step > 0 and step % config['every_n_steps_save'] == 0: # Save every 1000 steps
-         save_checkpoint(step, raw_model, optimizer, loss_accum.item() if master_process else None)
+    autocast_context = torch.autocast(device_type=device, dtype=torch.bfloat16)
 
-    print(f"iter: {step+1:4d}  |  loss: {loss_accum.item():.6f}  |  ppl: {ppl:.6f}  |  lr {lr:.4e}  |  norm {norm:.4f}  |  time: {dt:.2f}ms  |  tok/sec: {tokens_per_sec:.2f}")
-    wandb.log({
-            "loss": loss_accum.item(),
-            "perplexity": ppl.item(),
-            "grad_norm": norm.item(),
-            "tokens_per_sec": tokens_per_sec,
-            "time_ms": dt,
-        }, step=step)
+    for step in range(start_step, config.max_steps):
+        t0 = time.time()
 
-# Save final checkpoint
-save_checkpoint(max_steps -1, raw_model, optimizer, losses[-1] if losses else None)
-wandb.finish()
-if ddp:
-    destroy_process_group()
+        if step > 0 and step % config.eval_interval == 0:
+            val_loss = evaluate_loss(model, val_loader, device, config)
+            if ddp:
+                dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
+            if master_process:
+                print(f"Validation loss: {val_loss.item():.4f}")
+                if config.wandb_log:
+                    wandb.log({"val_loss": val_loss.item()}, step=step)
+
+        optimizer.zero_grad()
+        loss_accum = torch.zeros(1, device=device)
+        for micro_step in range(grad_accum_steps):
+            x, y = train_loader.next_batch()
+            x, y = x.to(device), y.to(device)
+            if ddp:
+                model.require_backward_grad_sync = (micro_step == grad_accum_steps - 1)
+            with autocast_context:
+                _, loss = model(x, y)
+            loss = loss / grad_accum_steps
+            loss_accum += loss.detach()
+            loss.backward()
+
+        if ddp:
+            dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
+
+        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        lr = get_lr(step, config)
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
+        optimizer.step()
+        
+        torch.cuda.synchronize()
+        t1 = time.time()
+
+        if master_process:
+            dt = (t1 - t0) * 1000
+            tokens_per_sec = (train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size) / (t1 - t0)
+            
+            print(f"iter: {step+1:4d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm {norm:.4f} | time: {dt:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
+            if config.wandb_log:
+                wandb.log({
+                    "loss": loss_accum.item(),
+                    "grad_norm": norm.item(),
+                    "tokens_per_sec": tokens_per_sec,
+                    "time_ms": dt,
+                    "lr": lr,
+                }, step=step)
+
+        if config.save_checkpoints and step > 0 and step % config.every_n_steps_save == 0:
+            save_checkpoint(step, raw_model, optimizer, loss_accum.item(), master_process)
+
+    save_checkpoint(config.max_steps - 1, raw_model, optimizer, loss_accum.item(), master_process)
+    if config.wandb_log and master_process:
+        wandb.finish()
+    if ddp:
+        destroy_process_group()

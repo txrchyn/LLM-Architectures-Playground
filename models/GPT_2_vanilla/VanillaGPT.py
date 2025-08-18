@@ -3,22 +3,23 @@ import torch
 import inspect
 from torch.functional import F
 from .Block import Block
+from .gpt_2_vanilla_config import gpt_2_vanilla_config
 from typing import Dict, Any, Optional, Tuple
 
 
 class VanillaGPT(nn.Module):
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: gpt_2_vanilla_config):
         super().__init__()
         self.config = config
 
         self.transformer = nn.ModuleDict(dict(
-            wte  = nn.Embedding(config['vocab_size'], config['n_embd']),
-            wpe  = nn.Embedding(config['block_size'], config['n_embd']),
-            h    = nn.ModuleList([Block(config) for _ in range(config['n_layer'])]),
-            ln_f = nn.LayerNorm(config['n_embd']),
+            wte  = nn.Embedding(config.vocab_size, config.n_embd),
+            wpe  = nn.Embedding(config.block_size, config.n_embd),
+            h    = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            ln_f = nn.LayerNorm(config.n_embd),
         ))
-        self.lm_head = nn.Linear(config['n_embd'], config['vocab_size'], bias=config['bias'])
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=config.bias)
 
         # weight sharing scheme
         self.transformer.wte.weight = self.lm_head.weight
@@ -30,7 +31,7 @@ class VanillaGPT(nn.Module):
         if isinstance(module, nn.Linear):
             std = 0.02
             if hasattr(module, 'NANOGPT_SCALE_INIT'):
-                std *= (2 * self.config['n_layer']) ** -0.5
+                std *= (2 * self.config.n_layer) ** -0.5
                 nn.init.normal_(module.weight, mean=0, std=std)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
@@ -39,7 +40,7 @@ class VanillaGPT(nn.Module):
 
     def forward(self, idx, targets=None):
         b, t = idx.size()
-        assert t <= self.config['block_size'], f"Cannot forward sequence of length {t}, block size is only {self.config['block_size']}"
+        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device="cuda") # shape (t)
 
         tok_emb = self.transformer.wte(idx) 
@@ -66,8 +67,8 @@ class VanillaGPT(nn.Module):
     ) -> torch.Tensor:
         self.eval()
         for _ in range(max_new_tokens):
-            idx_cond = idx if idx.size(1) <= self.config['block_size'] else idx[:, -self.config['block_size']:]
-            
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+
             logits, _ = self(idx_cond)
             
             logits = logits[:, -1, :] / temperature

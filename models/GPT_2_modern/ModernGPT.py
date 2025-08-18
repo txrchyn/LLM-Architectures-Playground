@@ -6,22 +6,23 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 from .Block import Block
+from .gpt_2_modern_config import gpt_2_modern_config
 
 
 class ModernGPT(nn.Module):
     """
     A Generative Pre-trained Transformer model.
     """
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: gpt_2_modern_config) -> None:
         super().__init__() 
         self.config = config
         
         self.transformer = nn.ModuleDict(dict(
-            wte=nn.Embedding(config['vocab_size'], config['n_embd']),
-            h=nn.ModuleList([Block(config) for _ in range(config['n_layer'])]),
-            ln_f=nn.RMSNorm(config['n_embd']),
+            wte=nn.Embedding(config.vocab_size, config.n_embd),
+            h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            ln_f=nn.RMSNorm(config.n_embd),
         ))
-        self.lm_head = nn.Linear(config['n_embd'], config['vocab_size'], bias=config['bias'])
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=config.bias)
 
         self.transformer.wte.weight = self.lm_head.weight
         
@@ -31,7 +32,7 @@ class ModernGPT(nn.Module):
         if isinstance(module, nn.Linear):
             std = 0.02
             if hasattr(module, 'NANOGPT_SCALE_INIT'):
-                std *= (2 * self.config['n_layer']) ** -0.5
+                std *= (2 * self.config.n_layer) ** -0.5
             nn.init.normal_(module.weight, mean=0.0, std=std)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
@@ -44,9 +45,9 @@ class ModernGPT(nn.Module):
         targets: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         B, T = idx.size()
-        if T > self.config['block_size']:
-            raise ValueError(f"Cannot forward sequence of length {T}, block size is only {self.config['block_size']}")
-        
+        if T > self.config.block_size:
+            raise ValueError(f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}")
+
         tok_emb = self.transformer.wte(idx)
         x = tok_emb
         
@@ -73,8 +74,8 @@ class ModernGPT(nn.Module):
     ) -> torch.Tensor:
         self.eval()
         for _ in range(max_new_tokens):
-            idx_cond = idx if idx.size(1) <= self.config['block_size'] else idx[:, -self.config['block_size']:]
-            
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+
             logits, _ = self(idx_cond)
             
             logits = logits[:, -1, :] / temperature

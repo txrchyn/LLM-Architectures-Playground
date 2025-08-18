@@ -4,6 +4,7 @@ data/TinyStoriesV2-GPT4-valid.txt
 data/TinyStoriesV2
 data/edu_fineweb10B
 /checkpoints/
+/wandb/
 # created by virtualenv automatically
 # Byte-compiled / optimized / DLL files
 __pycache__/
