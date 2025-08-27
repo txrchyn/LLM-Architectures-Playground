@@ -1,10 +1,9 @@
 import os
-import yaml
 import torch
 import tiktoken
 from argparse import ArgumentParser
 
-from models import create_model
+from models import create_model, create_config
 
 parser = ArgumentParser(description='Generate text from a trained GPT model.')
 parser.add_argument('--checkpoint_path', type=str, required=True, help='Path to a checkpoint file or a directory containing checkpoints.')
@@ -31,24 +30,30 @@ elif not os.path.isfile(checkpoint_path):
 print(f"Loading checkpoint from {checkpoint_path}...")
 checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-config = checkpoint.get('config')
-if config is None:
-    raise ValueError("Config not found in checkpoint. Please retrain and save with config.")
+config_dict = checkpoint.get('config')
+if config_dict is None:
+    raise ValueError("Config not found in checkpoint.")
 
-model_name = config.get('model_name')
+model_name = config_dict.get('model_name')
+if model_name is None:
+    raise ValueError("model_name not found in the config dictionary within the checkpoint.")
 print(f"Initializing model: {model_name}")
 
+config = create_config(model_name, config_dict)
 model = create_model(model_name, config)
 
 state_dict = checkpoint['model']
-state_dict = {k.replace('_orig_mod.', '').replace('module.', ''): v for k, v in state_dict.items()}
+unwanted_prefix = '_orig_mod.'
+for k,v in list(state_dict.items()):
+    if k.startswith(unwanted_prefix):
+        state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
 model.load_state_dict(state_dict)
 
 model.eval()
 model.to(device)
 print("Model loaded successfully.")
 
-tokenizer_name = config.get('dataset_name', 'tinystories')
+tokenizer_name = config.dataset_name
 print(f"Initializing tokenizer for: {tokenizer_name}")
 if 'shakespeare' in tokenizer_name:
     with open('data/tinyshakespeare.txt', 'r', encoding='utf-8') as f:

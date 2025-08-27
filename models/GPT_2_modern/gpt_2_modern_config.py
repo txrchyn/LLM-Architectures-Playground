@@ -3,7 +3,7 @@ from dataclasses import dataclass
 @dataclass
 class gpt_2_modern_config:
     # --- Wandb Config ---
-    wandb_log: bool = True
+    wandb_log: bool = False
     wandb_run_name: str = 'modern-gpt-124M'
 
     # --- Model Config ---

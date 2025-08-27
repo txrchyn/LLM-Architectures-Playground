@@ -4,6 +4,7 @@ import time
 import math
 import importlib.util
 from dotenv import load_dotenv
+from dataclasses import asdict
 from argparse import ArgumentParser
 
 import wandb
@@ -49,6 +50,7 @@ def load_config_from_py_file(config_path):
     return config_module.config
 
 def get_lr(it, config):
+    "Cosine decay with warmup"
     warmup_steps = config.max_steps * config.warmup_steps_percentage
     min_lr = config.max_lr * config.weight_decay
     if it < warmup_steps:
@@ -74,8 +76,8 @@ def evaluate_loss(model, loader, device, config):
     model.train()
     return val_loss_accum
 
-def save_checkpoint(step, model, optimizer, loss, config, is_master):
-    if not is_master:
+def save_checkpoint(step, model, optimizer, loss, config, master_process):
+    if not master_process:
         return
     
     checkpoint_dir = f"checkpoints/{config.model_name}"
@@ -83,12 +85,14 @@ def save_checkpoint(step, model, optimizer, loss, config, is_master):
         os.makedirs(checkpoint_dir, exist_ok=True)
         
     path = os.path.join(checkpoint_dir, f"ckpt_step_{step}.pth")
+    config_dict = asdict(config)
+
     checkpoint = {
         'model': model.state_dict(),
         'optimizer': optimizer.state_dict(),
         'step': step,
         'loss': loss,
-        'config': config,
+        'config': config_dict,
     }
     torch.save(checkpoint, path)
     print(f"Saved checkpoint to {path} at step {step}")
@@ -223,9 +227,9 @@ if __name__ == '__main__':
                 }, step=step)
 
         if config.save_checkpoints and step > 0 and step % config.every_n_steps_save == 0:
-            save_checkpoint(step, raw_model, optimizer, loss_accum.item(), master_process)
+            save_checkpoint(step, raw_model, optimizer, loss_accum.item(), config, master_process)
 
-    save_checkpoint(config.max_steps - 1, raw_model, optimizer, loss_accum.item(), master_process)
+    save_checkpoint(config.max_steps - 1, raw_model, optimizer, loss_accum.item(), config, master_process)
     if config.wandb_log and master_process:
         wandb.finish()
     if ddp:

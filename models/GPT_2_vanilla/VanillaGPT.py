@@ -4,7 +4,7 @@ import inspect
 from torch.functional import F
 from .Block import Block
 from .gpt_2_vanilla_config import gpt_2_vanilla_config
-from typing import Dict, Any, Optional, Tuple
+from typing import Optional, Tuple
 
 
 class VanillaGPT(nn.Module):
