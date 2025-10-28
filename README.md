@@ -96,7 +96,7 @@ This table highlights the core component differences between the implemented mod
 | :--- | :--- | :--- |
 | **`GPT-2 (Vanilla)`** | • Learned Absolute Positional Embeddings<br>• LayerNorm<br>• GELU Activation<br>• Manual Attention Implementation | A faithful implementation of the original GPT-2 architecture. It serves as a strong, well-understood baseline for all experiments. |
 | **`GPT-2 (Modern)`** | • **Rotary Positional Embeddings (RoPE)**<br>• **RMSNorm**<br>• **SwiGLU** Activation<br>• **Flash Attention** (`F.sdpa`) | An upgraded architecture incorporating modern, highly efficient techniques from models like Llama and Mistral for improved performance and training stability. |
-| *`YourNextModel (TBD)`* | *• Grouped-Query Attention<br>• ...* | *A future implementation to test...* |
+| *`NextModel (TBD)`* | *• Grouped-Query Attention<br>• ...* | *A future implementation to test...* |
 
 ### Benchmark Results
 
