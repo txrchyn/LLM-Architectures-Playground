@@ -1,12 +1,12 @@
 import inspect
-from typing import Dict, Optional, Tuple, Any
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torchtune.modules import RotaryPositionalEmbeddings
 
-from .gpt_2_modern_config import gpt_2_modern_config
+from .config import ModernGPTConfig
 
 
 class CausalSelfAttention(nn.Module):
@@ -14,10 +14,11 @@ class CausalSelfAttention(nn.Module):
     A multi-head causal self-attention module that integrates Rotary Positional
     Embeddings (RoPE) using the torchtune library implementation.
     """
-    def __init__(self, config: gpt_2_modern_config) -> None:
+    def __init__(self, config: ModernGPTConfig) -> None:
         super().__init__()
         assert config.n_embd % config.n_head == 0
 
+        self.config = config
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         self.n_head = config.n_head

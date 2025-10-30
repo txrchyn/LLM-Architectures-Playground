@@ -13,8 +13,12 @@ LLM-ARCHITECTURES-PLAYGROUND/
 │   ├── prepare_tinystories.py  # Script to prepare TinyStories
 │   └── tinyshakespeare.txt     # A classic dataset for testing
 ├── models/                     # Model source code
-│   ├── GPT_2_modern/           # Modern GPT implementation
-│   └── GPT_2_vanilla/          # Classic GPT-2 implementation for comparison
+│   ├── modern_gpt/             # Modern GPT implementation (RoPE + SwiGLU)
+│   ├── vanilla_gpt/            # Classic GPT-2 baseline
+│   ├── gqa_gpt/                # Grouped-Query GPT variant
+│   ├── Linformer/              # Linformer-style efficient transformer
+│   ├── StateSpace/             # State-space language model
+│   └── MoE/                    # Mixture-of-Experts transformer
 ├── utils/                      # Helper utilities
 │   └── DataLoaderLite.py       # An efficient data loader
 ├── .env                        # Environment variables file (for WandB keys)
@@ -43,7 +47,7 @@ LLM-ARCHITECTURES-PLAYGROUND/
     ```
 
 3.  **Set up environment variables (optional, for WandB):**
-    Create a `.env` file in the root directory and add your Weights & Biases credentials:
+    Create a `.env` file in the root directory and add your Weights & Biases credentials
     ```
     WANDB_API_KEY="your_wandb_api_key"
     WANDB_PROJECT_NAME="llm-playground"
@@ -62,16 +66,24 @@ LLM-ARCHITECTURES-PLAYGROUND/
 
 The `train.py` script is used to launch training runs. It requires a path to a configuration file.
 
-**Example: Training on a single GPU:**
+**Example: Training on a single GPU (Modern GPT):**
 ```bash
-python train.py --config models/GPT_2_modern/gpt_2_modern_config.py
+python train.py --config models/modern_gpt/config.py
 ```
 
 **Example: Distributed training on 2 GPUs:**
 ```bash
-torchrun --standalone --nproc_per_node=2 train.py --config models/GPT_2_modern/gpt_2_modern_config.py
+torchrun --standalone --nproc_per_node=2 train.py --config models/modern_gpt/config.py
 ```
 All training hyperparameters, such as batch size, learning rate, model architecture, and dataset, are defined within the specified config file.
+
+Other available configs:
+
+- `models/vanilla_gpt/config.py` – classic GPT-2 baseline  
+- `models/gqa_gpt/config.py` – grouped-query attention GPT  
+- `models/Linformer/linformer_config.py` – Linformer language model  
+- `models/StateSpace/state_space_config.py` – state-space language model  
+- `models/MoE/moe_config.py` – Mixture-of-Experts GPT
 
 ### Inference
 
@@ -84,6 +96,22 @@ python sample.py \
     --max_new_tokens=100
 ```
 
+### Benchmarking
+
+This repo ships with a thin adapter for [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness). Install the harness (`pip install git+https://github.com/EleutherAI/lm-evaluation-harness.git@main`) and run:
+
+```bash
+python run_benchmarks.py \
+  --model-name modern \
+  --checkpoint checkpoints/modern/ckpt_step_999.pth \
+  --tasks hellaswag,arc_easy \
+  --batch-size 4 \
+  --dtype bfloat16 \
+  --device cuda:0
+```
+
+The script bootstraps our local adapter, forwards configuration to `lm-evaluation-harness`, and prints the aggregated JSON results. Use `--output-json metrics.json` to persist the full report.
+
 ## Architectures
 
 This repository contains several GPT architectures designed for comparative analysis. The main goal is to demonstrate the impact of modern architectural improvements over a classic baseline. As new architectures and benchmarks are added, they will be included in the comparison below.
@@ -94,9 +122,18 @@ This table highlights the core component differences between the implemented mod
 
 | Architecture | Key Components | Description / Purpose |
 | :--- | :--- | :--- |
+<<<<<<< HEAD
 | **`GPT-2 (Vanilla)`** | • Learned Absolute Positional Embeddings<br>• LayerNorm<br>• GELU Activation<br>• Manual Attention Implementation | A faithful implementation of the original GPT-2 architecture. It serves as a strong, well-understood baseline for all experiments. |
 | **`GPT-2 (Modern)`** | • **Rotary Positional Embeddings (RoPE)**<br>• **RMSNorm**<br>• **SwiGLU** Activation<br>• **Flash Attention** (`F.sdpa`) | An upgraded architecture incorporating modern, highly efficient techniques from models like Llama and Mistral for improved performance and training stability. |
 | *`NextModel (TBD)`* | *• Grouped-Query Attention<br>• ...* | *A future implementation to test...* |
+=======
+| **Vanilla GPT** | • Learned absolute positional embeddings<br>• LayerNorm<br>• GELU MLP | Faithful GPT-2 baseline for apples-to-apples comparisons. |
+| **Modern GPT** | • Rotary Positional Embeddings (RoPE)<br>• RMSNorm<br>• SwiGLU MLP<br>• Flash attention (`F.sdpa`) | Modernized GPT stack inspired by Llama/Mistral for better efficiency and stability. |
+| **GQA GPT** | • Grouped-query attention (shared K/V heads)<br>• LayerNorm<br>• GELU MLP | Reduces KV cache size and speeds up decoding by sharing keys/values. |
+| **Linformer GPT** | • Learned low-rank sequence projections<br>• LayerNorm<br>• GELU MLP | Linear-time attention via Linformer-style projections for long contexts. |
+| **State-Space LM** | • Diagonal state-space residual blocks<br>• LayerNorm<br>• GELU MLP | Captures long-range patterns with recurrent state-space dynamics. |
+| **MoE GPT** | • Top-k router with expert FFNs<br>• LayerNorm<br>• GELU experts | Mixture-of-Experts feed-forward layers for higher capacity at similar compute. |
+>>>>>>> 2f43700 (add models and bench's)
 
 ### Benchmark Results
 
@@ -106,8 +143,12 @@ The following table presents the performance metrics for each architecture. The 
 
 | Model | Parameters | HellaSwag (acc_norm) | Training Speed (tokens/sec) | Inference Speed (tok/s) | VRAM Usage (Train, GB) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `GPT-2 (Vanilla)` | 124M | `TBD` | `TBD` | `TBD` | `TBD` |
-| `GPT-2 (Modern)` | 123M | `TBD` | `TBD` | `TBD` | `TBD` |
+| `Vanilla GPT` | 124M | `TBD` | `TBD` | `TBD` | `TBD` |
+| `Modern GPT` | 123M | `TBD` | `TBD` | `TBD` | `TBD` |
+| `GQA GPT` | 123M | `TBD` | `TBD` | `TBD` | `TBD` |
+| `Linformer GPT` | 120M | `TBD` | `TBD` | `TBD` | `TBD` |
+| `State-Space LM` | 120M | `TBD` | `TBD` | `TBD` | `TBD` |
+| `MoE GPT` | 124M(+ experts) | `TBD` | `TBD` | `TBD` | `TBD` |
 
 
 ### Running the Benchmarks

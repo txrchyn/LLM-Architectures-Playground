@@ -1,33 +1,50 @@
-from .GPT_2_modern.ModernGPT import ModernGPT
-from .GPT_2_vanilla.VanillaGPT import VanillaGPT
+# registry.py
 
-from .GPT_2_modern.gpt_2_modern_config import gpt_2_modern_config
-from .GPT_2_vanilla.gpt_2_vanilla_config import gpt_2_vanilla_config
+from .modern_gpt import ModernGPT, ModernGPTConfig
+from .vanilla_gpt import VanillaGPT, VanillaGPTConfig
+from .gqa_gpt import GQAGPT, GQAGPTConfig
+from .StateSpace import StateSpaceLM, StateSpaceConfig
+from .Linformer import LinformerLM, LinformerConfig
+
+# === MoE imports ===
+from .MoE.moe_model import MoEGPT
+from .MoE.moe_config import MoEConfig
 
 MODEL_REGISTRY = {
     'modern': ModernGPT,
     'vanilla': VanillaGPT,
+    'gqa': GQAGPT,
+    'linformer': LinformerLM,
+    'ssm': StateSpaceLM,
+    'moe': MoEGPT,          # <-- добавили
 }
 
 CONFIG_REGISTRY = {
-    'modern': gpt_2_modern_config,
-    'vanilla': gpt_2_vanilla_config,
+    'modern': ModernGPTConfig,
+    'vanilla': VanillaGPTConfig,
+    'gqa': GQAGPTConfig,
+    'linformer': LinformerConfig,
+    'ssm': StateSpaceConfig,
+    'moe': MoEConfig,       # <-- добавили
 }
 
-def create_model(model_name: str, config: dict):
+def create_model(model_name: str, config):
+    """
+    Создаёт модель по имени. Аргумент `config` должен быть ИМЕННО объектом конфига
+    соответствующего класса (а не dict).
+    """
     if model_name not in MODEL_REGISTRY:
         raise ValueError(f"Model '{model_name}' not found in registry. Available: {list(MODEL_REGISTRY.keys())}")
-    
-    model_class = MODEL_REGISTRY[model_name]
-    model = model_class(config)
-    return model
 
-def create_config(model_name, config_dict):
+    model_class = MODEL_REGISTRY[model_name]
+    return model_class(config)
+
+def create_config(model_name: str, config_dict: dict):
     """
-    Creates a config object from a dictionary based on the model name.
+    Создаёт объект конфига из dict на основе имени модели.
     """
     if model_name not in CONFIG_REGISTRY:
-        raise ValueError(f"Unknown model name: {model_name}")
-    
+        raise ValueError(f"Unknown model name: {model_name}. Available: {list(CONFIG_REGISTRY.keys())}")
+
     config_class = CONFIG_REGISTRY[model_name]
     return config_class(**config_dict)

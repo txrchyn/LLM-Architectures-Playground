@@ -1,13 +1,13 @@
 from dataclasses import dataclass
 
 @dataclass
-class gpt_2_vanilla_config:
+class ModernGPTConfig:
     # --- Wandb Config ---
     wandb_log: bool = False
-    wandb_run_name: str = 'vanilla-gpt-124M'
+    wandb_run_name: str = 'modern-gpt-124M'
 
     # --- Model Config ---
-    model_name: str = 'vanilla'
+    model_name: str = 'modern'
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
@@ -16,7 +16,7 @@ class gpt_2_vanilla_config:
     bias: bool = False
 
     # --- Training Config ---
-    batch_size: int = 8
+    batch_size: int = 16
     sequence_length: int = 1024
     total_batch_size: int = 65536
     max_steps: int = 1000 #19073
@@ -34,4 +34,5 @@ class gpt_2_vanilla_config:
     eval_interval: int = 100
     eval_iters: int = 20
 
-config = gpt_2_vanilla_config()
+
+config = ModernGPTConfig()

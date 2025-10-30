@@ -1,68 +1,63 @@
 import inspect
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from .Block import Block
-from .gpt_2_modern_config import gpt_2_modern_config
+from .block import Block
+from .config import VanillaGPTConfig
 
 
-class ModernGPT(nn.Module):
-    """
-    A Generative Pre-trained Transformer model.
-    """
-    def __init__(self, config: gpt_2_modern_config) -> None:
-        super().__init__() 
+class VanillaGPT(nn.Module):
+
+    def __init__(self, config: VanillaGPTConfig):
+        super().__init__()
         self.config = config
-        
+
         self.transformer = nn.ModuleDict(dict(
             wte=nn.Embedding(config.vocab_size, config.n_embd),
+            wpe=nn.Embedding(config.block_size, config.n_embd),
             h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f=nn.RMSNorm(config.n_embd),
+            ln_f=nn.LayerNorm(config.n_embd),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=config.bias)
 
+        # weight sharing scheme
         self.transformer.wte.weight = self.lm_head.weight
-        
+
+        # init params
         self.apply(self._init_weights)
 
-    def _init_weights(self, module: nn.Module) -> None:
+    def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             std = 0.02
             if hasattr(module, 'NANOGPT_SCALE_INIT'):
                 std *= (2 * self.config.n_layer) ** -0.5
-            nn.init.normal_(module.weight, mean=0.0, std=std)
+                nn.init.normal_(module.weight, mean=0, std=std)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            elif isinstance(module, nn.Embedding):
+                nn.init.normal_(module.weight, mean=0, std=0.02)
 
-    def forward(
-        self,
-        idx: torch.Tensor,
-        targets: Optional[torch.Tensor] = None
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        B, T = idx.size()
-        if T > self.config.block_size:
-            raise ValueError(f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}")
+    def forward(self, idx, targets=None):
+        b, t = idx.size()
+        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)  # shape (t)
 
         tok_emb = self.transformer.wte(idx)
-        x = tok_emb
-        
+        pos_emb = self.transformer.wpe(pos)
+        x = tok_emb + pos_emb
+
         for block in self.transformer.h:
             x = block(x)
-            
+
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
-        
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-
         return logits, loss
-
 
     @torch.no_grad()
     def generate(

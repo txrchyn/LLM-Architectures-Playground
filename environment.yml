@@ -1,14 +1,26 @@
 name: gpt_env
 channels:
-  - pytorch
   - nvidia
+  - conda-forge
   - defaults
 dependencies:
-  - python=3.12
+  - python=3.11
   - numpy
   - transformers
   - tiktoken
   - datasets
   - wandb
   - tqdm
-  - pyyaml 
+  - pyyaml
+  - python-dotenv
+  - packaging
+  - pip
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/nightly/cu124
+      - --pre
+      - torch>=2.5.0.dev0
+      - torchvision>=0.20.0.dev0
+      - torchaudio>=2.5.0.dev0
+      - torchao
+      - torchtune
+      - einops
