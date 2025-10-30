@@ -122,18 +122,14 @@ This table highlights the core component differences between the implemented mod
 
 | Architecture | Key Components | Description / Purpose |
 | :--- | :--- | :--- |
-<<<<<<< HEAD
-| **`GPT-2 (Vanilla)`** | • Learned Absolute Positional Embeddings<br>• LayerNorm<br>• GELU Activation<br>• Manual Attention Implementation | A faithful implementation of the original GPT-2 architecture. It serves as a strong, well-understood baseline for all experiments. |
-| **`GPT-2 (Modern)`** | • **Rotary Positional Embeddings (RoPE)**<br>• **RMSNorm**<br>• **SwiGLU** Activation<br>• **Flash Attention** (`F.sdpa`) | An upgraded architecture incorporating modern, highly efficient techniques from models like Llama and Mistral for improved performance and training stability. |
-| *`NextModel (TBD)`* | *• Grouped-Query Attention<br>• ...* | *A future implementation to test...* |
-=======
+| **GPT-2 (Vanilla)** | • Learned Absolute Positional Embeddings<br>• LayerNorm<br>• GELU Activation<br>• Manual Attention Implementation | A faithful implementation of the original GPT-2 architecture. It serves as a strong, well-understood baseline for all experiments. |
+| **GPT-2 (Modern)** | • **Rotary Positional Embeddings (RoPE)**<br>• **RMSNorm**<br>• **SwiGLU** Activation<br>• **Flash Attention** (`F.sdpa`) | An upgraded architecture incorporating modern, highly efficient techniques from models like Llama and Mistral for improved performance and training stability. |
 | **Vanilla GPT** | • Learned absolute positional embeddings<br>• LayerNorm<br>• GELU MLP | Faithful GPT-2 baseline for apples-to-apples comparisons. |
 | **Modern GPT** | • Rotary Positional Embeddings (RoPE)<br>• RMSNorm<br>• SwiGLU MLP<br>• Flash attention (`F.sdpa`) | Modernized GPT stack inspired by Llama/Mistral for better efficiency and stability. |
 | **GQA GPT** | • Grouped-query attention (shared K/V heads)<br>• LayerNorm<br>• GELU MLP | Reduces KV cache size and speeds up decoding by sharing keys/values. |
 | **Linformer GPT** | • Learned low-rank sequence projections<br>• LayerNorm<br>• GELU MLP | Linear-time attention via Linformer-style projections for long contexts. |
-| **State-Space LM** | • Diagonal state-space residual blocks<br>• LayerNorm<br>• GELU MLP | Captures long-range patterns with recurrent state-space dynamics. |
+| **SSM** | • Diagonal state-space residual blocks<br>• LayerNorm<br>• GELU MLP | Captures long-range patterns with recurrent state-space dynamics. |
 | **MoE GPT** | • Top-k router with expert FFNs<br>• LayerNorm<br>• GELU experts | Mixture-of-Experts feed-forward layers for higher capacity at similar compute. |
->>>>>>> 2f43700 (add models and bench's)
 
 ### Benchmark Results
 
@@ -147,7 +143,7 @@ The following table presents the performance metrics for each architecture. The 
 | `Modern GPT` | 123M | `TBD` | `TBD` | `TBD` | `TBD` |
 | `GQA GPT` | 123M | `TBD` | `TBD` | `TBD` | `TBD` |
 | `Linformer GPT` | 120M | `TBD` | `TBD` | `TBD` | `TBD` |
-| `State-Space LM` | 120M | `TBD` | `TBD` | `TBD` | `TBD` |
+| `SSM` | 120M | `TBD` | `TBD` | `TBD` | `TBD` |
 | `MoE GPT` | 124M(+ experts) | `TBD` | `TBD` | `TBD` | `TBD` |
 
 
